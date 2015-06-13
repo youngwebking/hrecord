@@ -1,0 +1,159 @@
+require 'base64'
+require 'webhdfs-ruby'
+require 'tempfile'
+require 'active_support/inflector'
+
+module HRecord
+
+  class Formatter
+  
+    attr_accessor :tablename, :cfnames
+    
+    def initialize(tablename, cfnames)
+      @tablename = tablename
+      @cfnames = cfnames
+    end
+    
+    def self.file_to_data(file)
+      data = ""
+      file.each_line do |line|
+        data += line
+      end
+      return data
+    end
+  
+    def self.json_to_dict(json)
+      dict = eval(json.gsub(/:/,'=>'))
+      return dict
+    end
+    
+    def self.decode_rows(rows)
+      rows = (self.json_to_dict rows)["Row"]
+      if rows == [] or rows == nil
+        rows = []
+      else
+        rows.each do |row|
+          row['key'] = Base64.decode64(row['key'])
+          cells = row['Cell']
+          cells.each do |cell|
+            cell['column'] = Base64.decode64(cell['column'])
+            cell['$'] = Base64.decode64(cell['$'])
+            if cell['$'] =~ /.*?\|\|\|\|\|.*/
+              content_type = cell['$'].gsub(/\|\|\|\|\|.*/, '')
+              data = cell['$'].gsub(/.*?\|\|\|\|\|/, '')
+              
+              #self.code_file(data, content_type)
+            end
+            #if cell['column'].gsub(/:.*/,'') == 'file'
+              #url = WebHDFS::Connection.new('http://buildyourpatent.com', 40070).get_url(cell['$']).to_s
+              #cell['$'] = url
+            #end
+          end
+        end
+      end
+      return rows
+    end
+    
+    def hbase_to_dict(hbase)
+      rslt = hbase
+      keys = []
+      rslt.scan(/[^\s]+\s*=>\s*/).each do |i|
+        keys += [i.gsub(/=>/, '').gsub(/\s+/, '')]
+      end
+      keys.each do |key|
+        rslt = rslt.gsub(/\s#{key}/, "'#{key}'")
+      end
+      #rslt = rslt.gsub(/\'+/, '\'')
+      return eval(rslt)
+    end
+    
+#    {
+#      "key"=>"587b86aa-17b7-4933-bcb7-c1c020b5e0c4",
+#      "Cell"=>[
+#        {
+#          "column"=>"attr:name",
+#          "timestamp"=>1416112381601,
+#          "$"=>"Thing"
+#        },
+#        {
+#          "column"=>"attr:price",
+#          "timestamp"=>1416112381601,
+#          "$"=>"9.99"
+#        }
+#      ]
+#    }
+
+    def params_to_model(params)
+      db_to_model(params_to_db(params))
+    end
+    
+    def model_to_db(object) 
+      row = {}
+      cells= []
+      row['key'] = object.row_key
+      @cfnames.each do |cfname|
+        cfdata = eval('object.' + cfname.pluralize)
+        cfdata.each do |qual, val|
+          cell = {}
+          cell['column'] = cfname + ':' + qual
+          cell['$'] = val
+          cells += [cell]
+        end
+      end
+      row['Cell'] = cells
+      row
+    end
+    
+    def db_to_model(row)
+      row_key = row['key']
+      object = HRecord::Base.new
+      cells = row['Cell']
+      cfs = {}
+      cells.each do |cell|
+        cf = cell['column'].gsub(/:.*/, '')
+        qual = cell['column'].gsub(/.*?:/, '')
+        val = cell['$']
+        cfs[cf] ||= {}
+        cfs[cf] = cfs[cf].merge({qual => val}) unless cfs[cf].include? qual
+      end
+      @cfnames.each do |cf|
+        $attribute_name = cf.pluralize
+        class << object
+          attr_accessor $attribute_name
+        end  
+        if cfs[cf] != {} and cfs[cf] != nil
+          eval('object.' + $attribute_name + '=cfs[cf]')
+        else
+          eval('object.' + $attribute_name + '={}')
+        end
+        puts eval('object.'+$attribute_name)
+      end
+      class << object
+        attr_accessor 'row_key'
+      end
+      object.row_key = row_key
+      puts object
+      object
+    end
+
+    def params_to_db(params={})
+      row = {}
+      cells = []
+      
+      row['key'] = params['row_key']
+      params.each do |col, val|
+        if col != 'row_key'
+          cell = {}
+          cell['column'] = col
+          
+          cell['$'] = val
+          cells += [cell]
+        end
+      end
+      row['Cell'] = cells
+      row
+    end
+    
+  end
+  
+end

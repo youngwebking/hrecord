@@ -1,0 +1,20 @@
+params = {"attr:name"=>"Cube", "attr:price"=>"0.99"}
+
+HRecord::Connection.scan
+  =>  rows = [
+        {
+          "key"=>"MTY4YmJkNmUtMzUwOC00MmZlLTgzNTQtOWFlNTBiY2Y5MTkz",
+          "Cell"=>[
+            {
+              "column"=>"YXR0cjpuYW1l", 
+              "timestamp"=>1417817741078, 
+              "$"=>"Q3ViZQ=="
+            }, 
+            {
+              "column"=>"YXR0cjpwcmljZQ==", 
+              "timestamp"=>1417817741078, 
+              "$"=>"MC45OQ=="
+            }
+          ]
+        }
+      ]

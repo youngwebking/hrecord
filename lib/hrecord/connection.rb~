@@ -1,0 +1,270 @@
+require 'net/http'
+require 'base64'
+require 'httparty'
+require 'webhdfs-ruby'
+require File.join(File.dirname(__FILE__), "formatter")
+
+module HRecord
+  
+  class Connection < HRecord::Base
+    
+    attr_accessor :host
+    
+    def initialize(hostname='localhost', port=8080)
+      @hostname = hostname
+      @port = port
+      @host = hostname + ':' + port.to_s
+      @formatter = HRecord::Formatter
+    end
+    
+#    def scan(tablename, batch=nil, row=nil, col=nil)
+#      #col = 'cf:key'
+#      uri = @host
+#      uri += '/' + tablename + '/scanner'
+#      uri = URI(uri)
+#      
+#      batch = 1 if batch.nil?
+#      
+#      http = Net::HTTP.new(uri.hostname, uri.port)
+#      
+#      post = Net::HTTP::Post.new(uri)
+#      post.content_type = 'text/xml'
+#      post.body = '<Scanner batch="'+batch.to_s+'"/>'
+#      
+#      scanner = http.request(post)
+#      
+#      scanner = scanner["location"]
+#      scanner = URI(scanner)
+#      
+#      scan = Net::HTTP::Get.new(scanner)
+#      scan["accept"] = 'application/json'
+#      scan = http.request(scan)
+#      
+#      delete = Net::HTTP::Delete.new(scanner)
+#      http.request(delete)
+#      
+#      return scan.body
+#    end
+
+    def scan(tablename, args=nil)
+      # args = ['limit=1&columns=a:1,b:1']
+      
+      uri = @host
+      uri += '/' + tablename + '/*'
+      uri += '?' + args if !args.nil?
+      uri = URI(uri)
+      
+      http = Net::HTTP.new(uri.hostname, uri.port)
+      
+      scan = Net::HTTP::Get.new(uri)
+      scan["accept"] = 'application/json'
+      scan = http.request(scan)
+      
+      return @formatter.decode_rows(scan.body)
+    end
+    
+    def get(tablename=nil, row=nil, col=nil)
+      #col = 'cf:key'
+      uri = @host
+      uri += '/' + tablename if !tablename.nil?
+      uri += '/schema' if !tablename.nil? and row.nil? and col.nil?
+      uri += '/' + row if !row.nil?
+      uri += '/' + col if !col.nil?
+      uri = URI(uri)
+      
+      response = Net::HTTP.get_response(uri)
+      
+      if tablename.nil? and row.nil? and col.nil?
+        formatted = response.body.split
+      elsif !tablename.nil? and row.nil? and col.nil?
+        formatted = @formatter.hbase_to_dict(response.body)
+      else
+        formatted = response.body
+      end
+      return formatted if response.is_a?(Net::HTTPSuccess)
+    end
+    
+    def get_schema(tablename=nil)
+      uri = URI(@host+'/'+tablename+'/schema') if !tablename.nil?
+      
+      response = Net::HTTP.get_response(uri)
+      
+      formatted = @formatter.hbase_to_dict(response.body)
+      return formatted if response.is_a?(Net::HTTPSuccess)
+    end
+    
+    def put(tablename, rows)
+      puts 'putting'
+#      {
+#        'row1'=> {
+#          'cf1:key1'=> 'val1',
+#          'cf2:key2'=> 'val2'
+#        },
+#        'row2'=> {
+#          'cf3:key3'=> 'val3'
+#        }
+#      }
+      hbase_upload_path = "/user/hduser/uploads/"
+      
+      xml = '<CellSet>'
+      rows.each do |row|
+        rowkey = row['key']
+        if rowkey != nil
+          row_encoded = Base64.encode64(rowkey)
+          
+          xml += '<Row key="'+row_encoded+'">'
+          cells = row['Cell']
+          cells.each do |cell|
+            col = cell['column']
+            cf  = col.gsub(/:.*/, '')
+            val = cell['$']
+            col_encoded = Base64.encode64(col)
+            xml += '<Cell column="'+col_encoded+'=">'
+            #if cf == 'file'
+           
+            if val.is_a? ActionDispatch::Http::UploadedFile
+              #data = val.read
+              #content_type = val.content_type.chomp
+              #val_encoded = Base64.encode64(content_type+'|||||'+data)
+              
+              #filename = Time.now.to_s.gsub(/\s-\d{4}/, '').gsub(/\D/,'')+File.extname(val)
+              #path = hbase_upload_path+filename
+              #val_encoded = Base64.encode64(path)
+              #put_file(tablename, path, val)
+              
+              uuid = SecureRandom.uuid
+              put('hfiles', [HRecord::Formatter.new('hfiles',['attr']).params_to_db({
+                'row_key'           => uuid,
+                'attr:data'         => val.read,
+                'attr:extension'    => File.extname(val.open),
+                'attr:content_type' => val.content_type.chomp})])
+              val = uuid
+              
+              
+            #else
+            #  val_encoded = Base64.encode64(val)
+            end
+            val_encoded = Base64.encode64(val)
+            xml += val_encoded
+            xml += '</Cell>'
+          end
+          xml += '</Row>'
+        end
+      end
+      xml += '</CellSet>'
+      
+      uri = @host
+      uri += '/' + tablename
+      uri += '/fakerow'
+      #uri = URI(uri)
+      
+      response = HTTParty.post(uri, 
+                              :body => xml, 
+                              :headers => {'Content-type' => 'text/xml'}
+                              )
+      
+      return response
+    end
+    
+    def put_file(tablename, path, file)
+      #path = rows[rows.keys[0]][rows[rows.keys[0]].keys[0]]
+
+      #put(tablename, rows)
+      
+      hdfs = WebHDFS::Connection.new @hostname, 40070, 'hduser'
+      hdfs.create(file, path)
+    end
+    
+    def create(what, tablename, cfnames=nil)
+      uri = @host
+      if what == 'table' or what == 'schema'
+        uri += '/' + tablename + '/schema'
+      elsif what == 'scanner'
+        uri += '/' + tablename + '/scanner'
+      end
+      uri = URI(uri)
+      
+      xml =  "<?xml version='1.0' encoding='UTF-8'?>"
+      xml += "<TableSchema name='" + tablename + "'>"
+      cfnames.each do |cfname|
+        xml += "<ColumnSchema name='" + cfname + "' />"
+      end
+      xml += "</TableSchema>"
+      
+      request = Net::HTTP::Post.new(uri)
+      if what == 'table'
+        request.body = xml
+        request.content_type = 'text/xml'
+      end
+      
+      response = Net::HTTP.start(uri.hostname, uri.port) do |http|
+        http.request(request)
+      end
+      
+      return response
+    end
+    
+    def delete(tablename, row=nil, col=nil)
+      uri = @host + '/' + tablename
+      uri += '/schema' if row.nil? and col.nil?
+      uri += '/' + row if !row.nil?
+      uri += '/' + col if !col.nil?
+      uri = URI(uri)
+      
+      request = Net::HTTP::Delete.new(uri)
+      
+      response = Net::HTTP.start(uri.hostname, uri.port) do |http|
+        http.request(request)
+      end
+      
+      return response
+    end
+    
+  end
+  
+end
+
+#brant@pegasus:~/Desktop/hrecord (master)$ curl -H "Content-Type: text/xml" -d '<Scanner batch="1"/>' http://hbase.davepowerman.com:8080/users/scanner -L -v
+#* Hostname was NOT found in DNS cache
+#*   Trying 24.154.34.115...
+#* Connected to hbase.davepowerman.com (24.154.34.115) port 8080 (#0)
+#> POST /users/scanner HTTP/1.1
+#> User-Agent: curl/7.35.0
+#> Host: hbase.davepowerman.com:8080
+#> Accept: */*
+#> Content-Type: text/xml
+#> Content-Length: 20
+#> 
+#* upload completely sent off: 20 out of 20 bytes
+#< HTTP/1.1 201 Created
+#< Location: http://hbase.davepowerman.com:8080/users/scanner/14145512379501d0ee10
+#< Content-Length: 0
+#< 
+#* Connection #0 to host hbase.davepowerman.com left intact
+   
+#  def issuccessful(self, request):
+#    if request.status_code == 200 or request.status_code == 201:
+#      return True
+#    else:
+#      return False
+#  
+
+#p = Product.new
+#p.attr 'name' 'LED'
+#p.save
+
+
+#products.get 1
+#Product.find(1)
+
+
+
+#  # give Product a unique key
+#p.key = getNextKey()
+
+#p.attr 'name' 'LED'
+# -> 1 'attr:name': 'LED'
+#p.attr 'price' 0.95
+# -> 1 'attr:name': 0.95
+
+#1 'attr:name': 'LED'

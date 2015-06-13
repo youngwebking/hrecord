@@ -1,0 +1,24 @@
+<!-- HTTP POST create table with 2 column families -->
+<?xml version='1.0' encoding='UTF-8'?>
+<TableSchema name='test'>
+  <ColumnSchema name='cf1' />
+  <ColumnSchema name='cf2' />
+</TableSchema>
+
+<!--HTTP PUT single value -->
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<CellSet>
+  <Row key="name">
+    <Cell column="attr">
+      Brant Meier
+    </Cell>
+  </Row>
+</CellSet>
+
+<CellSet>
+  <Row key="dXNlcl8z">
+    <Cell column="YXR0cjplbWFpbA==">
+      amltM0BqaW0uY29t
+    </Cell>
+  </Row>
+</CellSet>
